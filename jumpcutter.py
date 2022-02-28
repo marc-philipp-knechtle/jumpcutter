@@ -134,10 +134,10 @@ def write_to_file():
 
 
 def create_jumpcutted_video():
-    global FRAME_RATE, outputAudioData
-    sampleRate, audioData = wavfile.read(os.path.join(TEMP_FOLDER, "audio.wav"))
-    audioSampleCount = audioData.shape[0]
-    maxAudioVolume = get_max_volume(audioData)
+    global FRAME_RATE, output_audio_data
+    sample_rate, audio_data = wavfile.read(os.path.join(TEMP_FOLDER, "audio.wav"))
+    audio_sample_count = audio_data.shape[0]
+    max_audio_volume = get_max_volume(audio_data)
     f = open(TEMP_FOLDER + "/params.txt", 'r+')
     pre_params = f.read()
     f.close()
@@ -146,67 +146,67 @@ def create_jumpcutted_video():
         m = re.search('Stream #.*Video.* ([0-9]*) fps', line)
         if m is not None:
             FRAME_RATE = float(m.group(1))
-    samplesPerFrame = sampleRate / FRAME_RATE
-    audioFrameCount = int(math.ceil(audioSampleCount / samplesPerFrame))
-    hasLoudAudio = np.zeros(audioFrameCount)
-    for i in range(audioFrameCount):
-        start = int(i * samplesPerFrame)
-        end = min(int((i + 1) * samplesPerFrame), audioSampleCount)
-        audiochunks = audioData[start:end]
-        maxchunksVolume = float(get_max_volume(audiochunks)) / maxAudioVolume
-        if maxchunksVolume >= SILENT_THRESHOLD:
-            hasLoudAudio[i] = 1
+    samples_per_frame = sample_rate / FRAME_RATE
+    audio_frame_count = int(math.ceil(audio_sample_count / samples_per_frame))
+    has_loud_audio = np.zeros(audio_frame_count)
+    for i in range(audio_frame_count):
+        start = int(i * samples_per_frame)
+        end = min(int((i + 1) * samples_per_frame), audio_sample_count)
+        audiochunks = audio_data[start:end]
+        maxchunks_volume = float(get_max_volume(audiochunks)) / max_audio_volume
+        if maxchunks_volume >= SILENT_THRESHOLD:
+            has_loud_audio[i] = 1
     chunks = [[0, 0, 0]]
-    shouldIncludeFrame = np.zeros(audioFrameCount)
-    for i in range(audioFrameCount):
+    should_include_frame = np.zeros(audio_frame_count)
+    for i in range(audio_frame_count):
         start = int(max(0, i - FRAME_SPREADAGE))
-        end = int(min(audioFrameCount, i + 1 + FRAME_SPREADAGE))
-        shouldIncludeFrame[i] = np.max(hasLoudAudio[start:end])
-        if i >= 1 and shouldIncludeFrame[i] != shouldIncludeFrame[i - 1]:  # Did we flip?
-            chunks.append([chunks[-1][1], i, shouldIncludeFrame[i - 1]])
-    chunks.append([chunks[-1][1], audioFrameCount, shouldIncludeFrame[i - 1]])
+        end = int(min(audio_frame_count, i + 1 + FRAME_SPREADAGE))
+        should_include_frame[i] = np.max(has_loud_audio[start:end])
+        if i >= 1 and should_include_frame[i] != should_include_frame[i - 1]:  # Did we flip?
+            chunks.append([chunks[-1][1], i, should_include_frame[i - 1]])
+    chunks.append([chunks[-1][1], audio_frame_count, should_include_frame[i - 1]])
     chunks = chunks[1:]
-    outputAudioData = np.zeros((0, audioData.shape[1]))
-    outputPointer = 0
-    lastExistingFrame = None
+    output_audio_data = np.zeros((0, audio_data.shape[1]))
+    output_pointer = 0
+    last_existing_frame = None
     for chunk in chunks:
-        audioChunk = audioData[int(chunk[0] * samplesPerFrame):int(chunk[1] * samplesPerFrame)]
+        audio_chunk = audio_data[int(chunk[0] * samples_per_frame):int(chunk[1] * samples_per_frame)]
 
-        sFile = TEMP_FOLDER + "/tempStart.wav"
-        eFile = TEMP_FOLDER + "/tempEnd.wav"
-        wavfile.write(sFile, SAMPLE_RATE, audioChunk)
-        with WavReader(sFile) as reader:
-            with WavWriter(eFile, reader.channels, reader.samplerate) as writer:
+        s_file = TEMP_FOLDER + "/tempStart.wav"
+        e_file = TEMP_FOLDER + "/tempEnd.wav"
+        wavfile.write(s_file, SAMPLE_RATE, audio_chunk)
+        with WavReader(s_file) as reader:
+            with WavWriter(e_file, reader.channels, reader.samplerate) as writer:
                 tsm = phasevocoder(reader.channels, speed=NEW_SPEED[int(chunk[2])])
                 tsm.run(reader, writer)
-        _, alteredAudioData = wavfile.read(eFile)
-        leng = alteredAudioData.shape[0]
-        endPointer = outputPointer + leng
-        outputAudioData = np.concatenate((outputAudioData, alteredAudioData / maxAudioVolume))
+        _, altered_audio_data = wavfile.read(e_file)
+        leng = altered_audio_data.shape[0]
+        end_pointer = output_pointer + leng
+        output_audio_data = np.concatenate((output_audio_data, altered_audio_data / max_audio_volume))
 
-        # outputAudioData[outputPointer:endPointer] = alteredAudioData/maxAudioVolume
+        # outputAudioData[output_pointer:end_pointer] = altered_audio_data/max_audio_volume
 
         # smooth out transitiion's audio by quickly fading in/out
 
         if leng < AUDIO_FADE_ENVELOPE_SIZE:
-            outputAudioData[outputPointer:endPointer] = 0  # audio is less than 0.01 sec, let's just remove it.
+            output_audio_data[output_pointer:end_pointer] = 0  # audio is less than 0.01 sec, let's just remove it.
         else:
             premask = np.arange(AUDIO_FADE_ENVELOPE_SIZE) / AUDIO_FADE_ENVELOPE_SIZE
             mask = np.repeat(premask[:, np.newaxis], 2, axis=1)  # make the fade-envelope mask stereo
-            outputAudioData[outputPointer:outputPointer + AUDIO_FADE_ENVELOPE_SIZE] *= mask
-            outputAudioData[endPointer - AUDIO_FADE_ENVELOPE_SIZE:endPointer] *= 1 - mask
+            output_audio_data[output_pointer:output_pointer + AUDIO_FADE_ENVELOPE_SIZE] *= mask
+            output_audio_data[end_pointer - AUDIO_FADE_ENVELOPE_SIZE:end_pointer] *= 1 - mask
 
-        startOutputFrame = int(math.ceil(outputPointer / samplesPerFrame))
-        endOutputFrame = int(math.ceil(endPointer / samplesPerFrame))
-        for outputFrame in range(startOutputFrame, endOutputFrame):
-            inputFrame = int(chunk[0] + NEW_SPEED[int(chunk[2])] * (outputFrame - startOutputFrame))
+        start_output_frame = int(math.ceil(output_pointer / samples_per_frame))
+        end_output_frame = int(math.ceil(end_pointer / samples_per_frame))
+        for outputFrame in range(start_output_frame, end_output_frame):
+            input_frame = int(chunk[0] + NEW_SPEED[int(chunk[2])] * (outputFrame - start_output_frame))
             try:
-                copy_frame(inputFrame, outputFrame)
-                lastExistingFrame = inputFrame
+                copy_frame(input_frame, outputFrame)
+                last_existing_frame = input_frame
             except FileNotFoundError:
-                copy_frame(lastExistingFrame, outputFrame)
+                copy_frame(last_existing_frame, outputFrame)
 
-        outputPointer = endPointer
+        output_pointer = end_pointer
 
 
 args = parse_arguments()
@@ -250,7 +250,7 @@ create_params()
 
 create_jumpcutted_video()
 
-wavfile.write(TEMP_FOLDER + "/audioNew.wav", SAMPLE_RATE, outputAudioData)
+wavfile.write(TEMP_FOLDER + "/audioNew.wav", SAMPLE_RATE, output_audio_data)
 
 write_to_file()
 
