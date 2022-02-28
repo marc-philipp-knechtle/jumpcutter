@@ -26,13 +26,13 @@ def get_max_volume(s):
     return max(maxv, -minv)
 
 
-def copy_frame(input_frame, output_frame):
+def copy_frame(input_frame, output_frame, temp_folder):
     # src = TEMP_FOLDER + "/frame{:06d}".format(inputFrame + 1) + ".jpg"
     frame_input: str = "frame{:06d}".format(input_frame + 1) + ".jpg"
-    src = os.path.join(TEMP_FOLDER, frame_input)
+    src = os.path.join(temp_folder, frame_input)
     # dst = TEMP_FOLDER + "/newFrame{:06d}".format(outputFrame + 1) + ".jpg"
     frame_output: str = "newFrame{:06d}".format(output_frame + 1) + ".jpg"
-    dst = os.path.join(TEMP_FOLDER, frame_output)
+    dst = os.path.join(temp_folder, frame_output)
     # if not os.path.isfile(src):
     #     return False
     try:
@@ -101,58 +101,59 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def create_frames():
-    command = "ffmpeg -i " + INPUT_FILE + " -qscale:v " + str(
-        FRAME_QUALITY) + " \"" + TEMP_FOLDER + "/frame%06d.jpg\" -hide_banner"
+def create_frames(input_file, frame_quality, temp_folder):
+    command = "ffmpeg -i " + input_file + " -qscale:v " + str(
+        frame_quality) + " \"" + temp_folder + "/frame%06d.jpg\" -hide_banner"
     logger.info("Executing: " + command)
     subprocess.call(command, shell=True)
 
 
-def create_audio():
-    command = "ffmpeg -i " + INPUT_FILE + " -ab 160k -ac 2 -ar " + str(
-        SAMPLE_RATE) + " -vn \"" + TEMP_FOLDER + "/audio.wav\""
+def create_audio(input_file, sample_rate, temp_folder):
+    command = "ffmpeg -i " + input_file + " -ab 160k -ac 2 -ar " + str(
+        sample_rate) + " -vn \"" + temp_folder + "/audio.wav\""
     logger.info("Executing: " + command)
     subprocess.call(command, shell=True)
 
 
 def set_input_file(arguments: argparse.Namespace) -> str:
     if arguments.url is not None:
-        return download_file(args.url)
+        return download_file(arguments.url)
     else:
-        return args.input_file
+        return arguments.input_file
 
 
 def set_output_file(arguments: argparse.Namespace) -> str:
     if len(arguments.output_file) >= 1:
         return arguments.output_file
     else:
-        return input_to_output_filename(INPUT_FILE)
+        return input_to_output_filename(arguments.input_file)
 
 
-def create_params():
-    command = "ffmpeg -i " + TEMP_FOLDER + "/input.mp4 2>&1"
-    file = open(TEMP_FOLDER + "/params.txt", "w")
+def create_params(temp_folder):
+    command = "ffmpeg -i " + temp_folder + "/input.mp4 2>&1"
+    file = open(temp_folder + "/params.txt", "w")
     subprocess.call(command, shell=True, stdout=file)
 
 
-def write_to_file():
+def write_to_file(temp_folder, frame_rate, output_file):
     """
     outputFrame = math.ceil(outputPointer/samplesPerFrame)
     for endGap in range(outputFrame,audioFrameCount):
         copyFrame(int(audioSampleCount/samplesPerFrame)-1,endGap)
     """
     command_local = "ffmpeg -framerate " + str(
-        FRAME_RATE) + " -i " + TEMP_FOLDER + "/newFrame%06d.jpg -i " + TEMP_FOLDER + "/audioNew.wav -strict -2 " \
-                    + OUTPUT_FILE
+        frame_rate) + " -i " + temp_folder + "/newFrame%06d.jpg -i " + temp_folder + "/audioNew.wav -strict -2 " \
+                    + output_file
     subprocess.call(command_local, shell=True)
 
 
-def create_jumpcutted_video(frame_rate):
+def create_jumpcutted_video(frame_rate, temp_folder: str, silent_threshold, frame_spreadage, sample_rate, new_speed,
+                            audio_fade_envelope_size):
     global output_audio_data
-    sample_rate, audio_data = wavfile.read(os.path.join(TEMP_FOLDER, "audio.wav"))
+    sample_rate, audio_data = wavfile.read(os.path.join(temp_folder, "audio.wav"))
     audio_sample_count = audio_data.shape[0]
     max_audio_volume = get_max_volume(audio_data)
-    f = open(TEMP_FOLDER + "/params.txt", 'r+')
+    f = open(temp_folder + "/params.txt", 'r+')
     pre_params = f.read()
     f.close()
     params = pre_params.split('\n')
@@ -168,13 +169,13 @@ def create_jumpcutted_video(frame_rate):
         end = min(int((i + 1) * samples_per_frame), audio_sample_count)
         audiochunks = audio_data[start:end]
         maxchunks_volume = float(get_max_volume(audiochunks)) / max_audio_volume
-        if maxchunks_volume >= SILENT_THRESHOLD:
+        if maxchunks_volume >= silent_threshold:
             has_loud_audio[i] = 1
     chunks = [[0, 0, 0]]
     should_include_frame = np.zeros(audio_frame_count)
     for i in range(audio_frame_count):
-        start = int(max(0, i - FRAME_SPREADAGE))
-        end = int(min(audio_frame_count, i + 1 + FRAME_SPREADAGE))
+        start = int(max(0, i - frame_spreadage))
+        end = int(min(audio_frame_count, i + 1 + frame_spreadage))
         should_include_frame[i] = np.max(has_loud_audio[start:end])
         if i >= 1 and should_include_frame[i] != should_include_frame[i - 1]:  # Did we flip?
             chunks.append([chunks[-1][1], i, should_include_frame[i - 1]])
@@ -186,12 +187,12 @@ def create_jumpcutted_video(frame_rate):
     for chunk in chunks:
         audio_chunk = audio_data[int(chunk[0] * samples_per_frame):int(chunk[1] * samples_per_frame)]
 
-        s_file = TEMP_FOLDER + "/tempStart.wav"
-        e_file = TEMP_FOLDER + "/tempEnd.wav"
-        wavfile.write(s_file, SAMPLE_RATE, audio_chunk)
+        s_file = temp_folder + "/tempStart.wav"
+        e_file = temp_folder + "/tempEnd.wav"
+        wavfile.write(s_file, sample_rate, audio_chunk)
         with WavReader(s_file) as reader:
             with WavWriter(e_file, reader.channels, reader.samplerate) as writer:
-                tsm = phasevocoder(reader.channels, speed=NEW_SPEED[int(chunk[2])])
+                tsm = phasevocoder(reader.channels, speed=new_speed[int(chunk[2])])
                 tsm.run(reader, writer)
         _, altered_audio_data = wavfile.read(e_file)
         leng = altered_audio_data.shape[0]
@@ -202,62 +203,56 @@ def create_jumpcutted_video(frame_rate):
 
         # smooth out transitiion's audio by quickly fading in/out
 
-        if leng < AUDIO_FADE_ENVELOPE_SIZE:
+        if leng < audio_fade_envelope_size:
             output_audio_data[output_pointer:end_pointer] = 0  # audio is less than 0.01 sec, let's just remove it.
         else:
-            premask = np.arange(AUDIO_FADE_ENVELOPE_SIZE) / AUDIO_FADE_ENVELOPE_SIZE
+            premask = np.arange(audio_fade_envelope_size) / audio_fade_envelope_size
             mask = np.repeat(premask[:, np.newaxis], 2, axis=1)  # make the fade-envelope mask stereo
-            output_audio_data[output_pointer:output_pointer + AUDIO_FADE_ENVELOPE_SIZE] *= mask
-            output_audio_data[end_pointer - AUDIO_FADE_ENVELOPE_SIZE:end_pointer] *= 1 - mask
+            output_audio_data[output_pointer:output_pointer + audio_fade_envelope_size] *= mask
+            output_audio_data[end_pointer - audio_fade_envelope_size:end_pointer] *= 1 - mask
 
         start_output_frame = int(math.ceil(output_pointer / samples_per_frame))
         end_output_frame = int(math.ceil(end_pointer / samples_per_frame))
         for outputFrame in range(start_output_frame, end_output_frame):
-            input_frame = int(chunk[0] + NEW_SPEED[int(chunk[2])] * (outputFrame - start_output_frame))
+            input_frame = int(chunk[0] + new_speed[int(chunk[2])] * (outputFrame - start_output_frame))
             try:
-                copy_frame(input_frame, outputFrame)
+                copy_frame(input_frame, outputFrame, temp_folder)
                 last_existing_frame = input_frame
             except FileNotFoundError:
-                copy_frame(last_existing_frame, outputFrame)
+                copy_frame(last_existing_frame, outputFrame, temp_folder)
 
         output_pointer = end_pointer
 
 
-args = parse_arguments()
+def main():
+    args = parse_arguments()
+    frame_rate = args.frame_rate
+    sample_rate = args.sample_rate
+    silent_threshold = args.silent_threshold
+    frame_spreadage = args.frame_margin
+    new_speed = [args.silent_speed, args.sounded_speed]
+    watcher_mode: bool = args.folder_watcher_mode
+    watched_dir: str = args.watched_dir
+    tmp_working_dir: str = args.tmp_working_dir
+    input_file = set_input_file(args)
+    output_file = set_output_file(args)
+    url = args.url
+    frame_quality = args.frame_quality
+    assert input_file is not None and watcher_mode is False, "why u put no input file, " \
+                                                             "and did not specify watcher mode, one has to be set"
+    temp_folder = os.path.join(tmp_working_dir, "tmp")
+    # smooth out transition's audio by quickly fading in/out (arbitrary magic number whatever)
+    audio_fade_envelope_size = 400
 
-FRAME_RATE = args.frame_rate
-SAMPLE_RATE = args.sample_rate
-SILENT_THRESHOLD = args.silent_threshold
-FRAME_SPREADAGE = args.frame_margin
-NEW_SPEED = [args.silent_speed, args.sounded_speed]
+    create_path(temp_folder)
+    create_frames(input_file, frame_quality, temp_folder)
+    create_audio(input_file, sample_rate, temp_folder)
+    create_params(temp_folder)
+    create_jumpcutted_video(frame_rate, temp_folder, silent_threshold, frame_spreadage, sample_rate, new_speed,
+                            audio_fade_envelope_size)
+    wavfile.write(temp_folder + "/audioNew.wav", sample_rate, output_audio_data)
+    write_to_file(temp_folder, frame_rate, output_file)
+    delete_path(temp_folder)
 
-WATCHER_MODE: bool = args.folder_watcher_mode
-WATCHED_DIR: str = args.watched_dir
-TMP_WORKING_DIR: str = args.tmp_working_dir
-INPUT_FILE = set_input_file(args)
-OUTPUT_FILE = set_output_file(args)
-URL = args.url
-FRAME_QUALITY = args.frame_quality
 
-assert INPUT_FILE is not None and WATCHER_MODE is False, "why u put no input file, " \
-                                                         "and did not specify watcher mode, one has to be set"
-
-TEMP_FOLDER = os.path.join(TMP_WORKING_DIR, "tmp")
-# smooth out transition's audio by quickly fading in/out (arbitrary magic number whatever)
-AUDIO_FADE_ENVELOPE_SIZE = 400
-
-create_path(TEMP_FOLDER)
-
-create_frames()
-
-create_audio()
-
-create_params()
-
-create_jumpcutted_video(FRAME_RATE)
-
-wavfile.write(TEMP_FOLDER + "/audioNew.wav", SAMPLE_RATE, output_audio_data)
-
-write_to_file()
-
-delete_path(TEMP_FOLDER)
+main()
