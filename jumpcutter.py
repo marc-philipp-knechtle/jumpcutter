@@ -115,6 +115,20 @@ def create_audio():
     subprocess.call(command, shell=True)
 
 
+def set_input_file(arguments: argparse.Namespace) -> str:
+    if arguments.url is not None:
+        return download_file(args.url)
+    else:
+        return args.input_file
+
+
+def set_output_file(arguments: argparse.Namespace) -> str:
+    if len(arguments.output_file) >= 1:
+        return arguments.output_file
+    else:
+        return input_to_output_filename(INPUT_FILE)
+
+
 def create_params():
     command = "ffmpeg -i " + TEMP_FOLDER + "/input.mp4 2>&1"
     file = open(TEMP_FOLDER + "/params.txt", "w")
@@ -133,8 +147,8 @@ def write_to_file():
     subprocess.call(command_local, shell=True)
 
 
-def create_jumpcutted_video():
-    global FRAME_RATE, output_audio_data
+def create_jumpcutted_video(frame_rate):
+    global output_audio_data
     sample_rate, audio_data = wavfile.read(os.path.join(TEMP_FOLDER, "audio.wav"))
     audio_sample_count = audio_data.shape[0]
     max_audio_volume = get_max_volume(audio_data)
@@ -145,8 +159,8 @@ def create_jumpcutted_video():
     for line in params:
         m = re.search('Stream #.*Video.* ([0-9]*) fps', line)
         if m is not None:
-            FRAME_RATE = float(m.group(1))
-    samples_per_frame = sample_rate / FRAME_RATE
+            frame_rate = float(m.group(1))
+    samples_per_frame = sample_rate / frame_rate
     audio_frame_count = int(math.ceil(audio_sample_count / samples_per_frame))
     has_loud_audio = np.zeros(audio_frame_count)
     for i in range(audio_frame_count):
@@ -220,21 +234,13 @@ NEW_SPEED = [args.silent_speed, args.sounded_speed]
 WATCHER_MODE: bool = args.folder_watcher_mode
 WATCHED_DIR: str = args.watched_dir
 TMP_WORKING_DIR: str = args.tmp_working_dir
-
-if args.url is not None:
-    INPUT_FILE = download_file(args.url)
-else:
-    INPUT_FILE = args.input_file
+INPUT_FILE = set_input_file(args)
+OUTPUT_FILE = set_output_file(args)
 URL = args.url
 FRAME_QUALITY = args.frame_quality
 
 assert INPUT_FILE is not None and WATCHER_MODE is False, "why u put no input file, " \
                                                          "and did not specify watcher mode, one has to be set"
-
-if len(args.output_file) >= 1:
-    OUTPUT_FILE = args.output_file
-else:
-    OUTPUT_FILE = input_to_output_filename(INPUT_FILE)
 
 TEMP_FOLDER = os.path.join(TMP_WORKING_DIR, "tmp")
 # smooth out transition's audio by quickly fading in/out (arbitrary magic number whatever)
@@ -248,7 +254,7 @@ create_audio()
 
 create_params()
 
-create_jumpcutted_video()
+create_jumpcutted_video(FRAME_RATE)
 
 wavfile.write(TEMP_FOLDER + "/audioNew.wav", SAMPLE_RATE, output_audio_data)
 
