@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 from shutil import copyfile, rmtree
+from time import sleep
 
 import numpy as np
 from audiotsm import phasevocoder
@@ -91,13 +92,18 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument('--frame_quality', type=int, default=3,
                         help="quality of frames to be extracted from input video. "
                              "1 is highest, 31 is lowest, 3 is the default.")
+    parser.add_argument('--tmp_working_dir', type=str, default="",
+                        help="Please specify a directory where all generated files will be temporarily stored. "
+                             "This may be be helpful considering the large storage space this script needs to run on.")
+
     parser.add_argument('--folder_watcher_mode', type=bool, default=False,
                         help="Mark true if you want to run this script in watcher mode. "
                              "This mode will process all files in the specified --watched_dir directory.")
     parser.add_argument('--watched_dir', type=str, help='The directory to listen for new files to process.')
-    parser.add_argument('--tmp_working_dir', type=str, default="",
-                        help="Please specify a directory where all generated files will be temporarily stored. "
-                             "This may be be helpful considering the large storage space this script needs to run on.")
+    parser.add_argument('--processed_output_dir', type=str, default="",
+                        help="The processed files will be placed in this directory if specfied. "
+                             "It's otherwise not possible to specify the output directory. "
+                             "The default output location is the scripts location.")
     return parser.parse_args()
 
 
@@ -125,6 +131,8 @@ def set_input_file(arguments: argparse.Namespace) -> str:
 def set_output_file(arguments: argparse.Namespace) -> str:
     if len(arguments.output_file) >= 1:
         return arguments.output_file
+    elif arguments.folder_watcher_mode:
+        return ""
     else:
         return input_to_output_filename(arguments.input_file)
 
@@ -141,6 +149,7 @@ def write_to_file(temp_folder, frame_rate, output_file):
     for endGap in range(outputFrame,audioFrameCount):
         copyFrame(int(audioSampleCount/samplesPerFrame)-1,endGap)
     """
+    logger.info("Writing processed file to: " + output_file)
     command_local = "ffmpeg -framerate " + str(
         frame_rate) + " -i " + temp_folder + "/newFrame%06d.jpg -i " + temp_folder + "/audioNew.wav -strict -2 " \
                     + output_file
@@ -224,6 +233,19 @@ def create_jumpcutted_video(frame_rate, temp_folder: str, silent_threshold, fram
         output_pointer = end_pointer
 
 
+def process_single_file(audio_fade_envelope_size, frame_quality, frame_rate, frame_spreadage, input_file, new_speed,
+                        output_file, sample_rate, silent_threshold, temp_folder):
+    create_path(temp_folder)
+    create_frames(input_file, frame_quality, temp_folder)
+    create_audio(input_file, sample_rate, temp_folder)
+    create_params(temp_folder)
+    create_jumpcutted_video(frame_rate, temp_folder, silent_threshold, frame_spreadage, sample_rate, new_speed,
+                            audio_fade_envelope_size)
+    wavfile.write(temp_folder + "/audioNew.wav", sample_rate, output_audio_data)
+    write_to_file(temp_folder, frame_rate, output_file)
+    delete_path(temp_folder)
+
+
 def main():
     args = parse_arguments()
     frame_rate = args.frame_rate
@@ -234,25 +256,36 @@ def main():
     watcher_mode: bool = args.folder_watcher_mode
     watched_dir: str = args.watched_dir
     tmp_working_dir: str = args.tmp_working_dir
+    processed_output_dir: str = args.processed_output_dir
+
     input_file = set_input_file(args)
     output_file = set_output_file(args)
+
     url = args.url
     frame_quality = args.frame_quality
-    assert input_file is not None and watcher_mode is False, "why u put no input file, " \
-                                                             "and did not specify watcher mode, one has to be set"
     temp_folder = os.path.join(tmp_working_dir, "tmp")
     # smooth out transition's audio by quickly fading in/out (arbitrary magic number whatever)
     audio_fade_envelope_size = 400
 
-    create_path(temp_folder)
-    create_frames(input_file, frame_quality, temp_folder)
-    create_audio(input_file, sample_rate, temp_folder)
-    create_params(temp_folder)
-    create_jumpcutted_video(frame_rate, temp_folder, silent_threshold, frame_spreadage, sample_rate, new_speed,
-                            audio_fade_envelope_size)
-    wavfile.write(temp_folder + "/audioNew.wav", sample_rate, output_audio_data)
-    write_to_file(temp_folder, frame_rate, output_file)
-    delete_path(temp_folder)
+    if not watcher_mode:
+        process_single_file(audio_fade_envelope_size, frame_quality, frame_rate, frame_spreadage, input_file, new_speed,
+                            output_file, sample_rate, silent_threshold, temp_folder)
+    else:
+        logger.info("Started folder watcher mode on folder: " + watched_dir)
+        try:
+            while True:
+                for filename in os.listdir(watched_dir):
+                    logger.info("Received file with name: " + filename)
+                    filepath = watched_dir + "/" + filename
+                    output_filename = input_to_output_filename(filename)
+                    process_single_file(audio_fade_envelope_size, frame_quality, frame_rate, frame_spreadage, filepath,
+                                        new_speed, os.path.join(processed_output_dir, output_filename), sample_rate,
+                                        silent_threshold, temp_folder)
+                    os.remove(filepath)
+                    logger.info("Saved processed file as: " + output_filename)
+                sleep(2)
+        except KeyboardInterrupt:
+            exit(0)
 
 
 main()
