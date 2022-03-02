@@ -1,4 +1,16 @@
 # jumpcutter
+
+## Fork changes
+* add watched directory and output directory 
+* add tmp-working directory to place the tmp files to another location than project root.
+
+### Helpful stuff
+Hide the output terminal and fome for a later evaluation:
+```sh
+nohup jumpcutter.py ... &
+```
+
+# Original Readme:
 Automatically edits videos. Explanation here: https://www.youtube.com/watch?v=DQ8orIurGxw
 
 Go here for a more polished version of this software that my friends and I have been working on fr the last year or so: https://jumpcutter.com/
